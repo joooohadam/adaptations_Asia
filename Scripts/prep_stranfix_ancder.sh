@@ -8,7 +8,7 @@
 ##### DESCRIPTION -----------------------------------------------------------------------
 #This script prepares .vcf files for the REFANC_pipeline.py script. It uses samtools 
 #-fill-aa to add reference or ancestral allele information in the INFO column of the 
-#file. 
+#file. External files used : reference genome or ancestral genome.
 #####------------------------------------------------------------------------------------
 
 
