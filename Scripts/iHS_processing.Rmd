@@ -1,0 +1,807 @@
+---
+title: "20250403_ihs_SW_v3"
+author: "Johanne"
+date: "2025-04-03"
+output: html_document
+---
+```{r loading packages, include=FALSE, suppressPackageStartupMessages = FALSE}
+library(ggplot2)
+library(tidyr)
+library(effsize)
+library(ggvenn)
+library(birk)
+library(sjmisc)
+library(gtools)
+```
+
+This script is what has been used to create the sliding windows for iHS used in 
+the paper. 
+
+
+# Loading raw data 
+
+## General info 
+```{r loading info, include = FALSE}
+#loading population names
+pops <- read.table('/path/to/prefix_pops.txt')
+pops <- pops$V1
+pops <- pops[which(pops!="LPR")] #removing LPR from analysis
+
+#array names 
+ALTAI <- pops[1:12]
+SOGEN1 <- pops[13:21]
+SOGEN25 <- pops[22:25]
+
+#loading bin info
+bins <- read.table('/path/to/bin/number_ind.txt', header=FALSE)
+bins <- bins[c(1:21, 23:26),] #removing LPR from analysis
+bins <- as.vector(bins)
+```
+
+Here, the raw ihh values computed by selscan are transformed into absolute values, 
+the pvalue is computed according to Gautier et al., 2017. 
+
+
+```{r loading files}
+to_remove <- NULL  #will be used to clean up
+raw_data <- list()
+
+for(p in pops){
+  assign(paste0(p), data.frame())
+  for(k in seq(1:22)){
+    #loading data
+    assign(paste0('ihh_LD_' , k), read.table(paste0('/path/to/selscan/output/', p, '/DATE_selscan.', p ,'.', k, '.ihs.out.', bins[match(p, pops)], 'bins.norm' ), col.names = c("locusID", "POSITION", "freq", "sl1", "sl2", 'unstandardized_iHS', 'iHS', 'zscore')))
+    
+    
+    abs_ihh <- abs(get(paste0('ihh_LD_' , k))$iHS) #absolute values of iHH values
+    chrom <- rep(k, times=dim(get(paste0('ihh_LD_' , k)))[1])     #add chromosome
+    pval <- -log10(2*pnorm(-abs(get(paste0('ihh_LD_' , k))$iHS))) #compute p-value
+    
+    assign(paste0('ihh_LD_' , k), cbind(chrom, get(paste0('ihh_LD_' , k)), abs_ihh, pval))
+    to_remove <- c(to_remove, paste0('ihh_LD_',k))
+    assign(paste0(p), rbind(get(paste0(p)), get(paste0('ihh_LD_' , k))))
+  }
+}
+```
+
+```{r cleanup 1, include=F}
+raw_data <- list(AKI,AKZ,BOU,HKS,KAZ,KIB,SHO,TAB,TLG,TUB,TUR,UZB,CBR,CJO,CKC,CMR,CPN,CRE,CSA,CST,CTA,LKM,LMT,LPO,LTA)
+names(raw_data) <- pops
+rm(AKI,AKZ,BOU,HKS,KAZ,KIB,SHO,TAB,TLG,TUB,TUR,UZB,CBR,CJO,CKC,CMR,CPN,CRE,CSA,CST,CTA,LKM,LMT,LPO,LTA)
+to_remove <- unique(to_remove)
+rm(list=to_remove)
+rm(pval, to_remove)
+```
+
+# Sliding windows 
+## Extremities 
+The goal here is to find the furthest start and end for each pop. This will be 
+used to start the first window and stop the last. 
+```{r closest and furthest position all array}
+##Generalizing sliding windows for all arrays 
+begining <- data.frame()
+ending <- data.frame()
+for(p in pops){
+  df <- raw_data[[p]]
+  for(k in seq(1,22)){
+    sub.df <- df[which(df$chrom == k),]
+    begining[p,k] <- sub.df$POSITION[which.min(sub.df$POSITION)] #first position
+    ending[p,k] <-  sub.df$POSITION[which.max(sub.df$POSITION)] #last position
+  }
+}
+first <- apply(X=begining, MARGIN = 2, min) #closest position
+last <- apply(X=ending, MARGIN = 2, max) #furthest position
+rm(begining, ending, df, sub.df) #cleanup
+```
+
+## Slicing
+Slicing into 100kb windows
+```{r dividing in intervals}
+names.100 <- c()
+
+#p counts the pop names 
+for(p in pops){
+  print(paste("Processing population : ", p))
+  df <- raw_data[[p]]
+  quantile_nsl <- quantile(df$abs_ihh, 0.99) #top 1% threshold genome-wide
+  assign(paste0(p, '_SW.100'), data.frame())
+  
+  #k counts the chromosomes 
+  for(k in seq(1:22)){
+    print(paste("Chromosome treated :",k))
+    sub.df <- df[which(df$chrom == k),]
+    sub.df <- sub.df[order(sub.df$chrom, sub.df$POSITION),] #ordering
+    
+    ###100kb###
+    w_beg <- first[k] #begining of 100kb interval
+    w_end <- w_beg + 100000 #end of 100kb interval
+    while(w_end < last[k]){
+      nb_snp <- as.numeric(length(which(sub.df$POSITION > w_beg & sub.df$POSITION < w_end))) #number of SNPs in 100kb
+      top_snp <- as.numeric(length(which(sub.df$POSITION > w_beg & sub.df$POSITION < w_end & sub.df$abs_ihh >= quantile_nsl))) #nb of snps in top 1%
+      prop_snp <- top_snp/nb_snp
+      assign(paste0(p, '_SW.100'), rbind(get(paste0(p, '_SW.100')), c(k, w_beg, w_end, nb_snp, top_snp, prop_snp))) #final table for 100kb
+      w_beg <- w_beg + 50000
+      w_end <- w_beg + 100000
+      names.100 <- c(names.100, paste0(p, '_SW.100'))
+    }
+    #print(paste("End of 100kb sectionning"))
+  }
+}
+
+col_names <- c("chrom", "w_beg", "w_end", "nb_snp", "top_snp", "prop_snp")
+
+for(p in pops) {
+  colnames(SW.100[[p]]) <- col_names
+}
+```    
+
+
+## Outliers
+Here we harvest the windows that show a proportion of SNPs within the top 1%
+distribution. We also filter and remove windows that contain 5 SNPs or less. 
+
+```{r window outliers}
+names.100 <- c()
+
+#p counts the pop names 
+for(p in pops){
+  
+  #100kb
+  threshold <- 5 #if 5 SNPs or less, window is discared. 
+  assign(paste0(p, '.outlier.100'), data.frame())
+  
+  df <- SW.100[[p]]
+  df <- df[-which(df$nb_snp <= threshold),]
+  quantile.win <- quantile(df$prop_snp, 0.99, na.rm =TRUE) #top 1% of prop_snp
+  assign(paste0(p, '.outlier.100'), df[which(df$prop_snp >= quantile.win),])
+  names.100 <- c(names.100, paste0(p, '.outlier.100'))
+}
+
+```
+
+Now we have a file of outlier windows for each population. 
+
+
+# MOST SHARED WINDOWS
+We decided to find the outliers that were most shared between populations. 
+
+## Preparation: aggregation of all outlier data 
+To do so, we used bedtools to intersect all the outlier window coordinates. 
+
+```{r exporting results}
+#p counts the pop names 
+for(p in pops){
+  
+  #100kb
+  df <- outliers.100[[p]]
+  write.table(x = df[,1:3], paste0("/path/to/output/DATE_outliers_100kb.", p, ".bed"), sep = '\t', quote = FALSE, row.names = FALSE, col.names = FALSE)
+}
+```
+
+```{bash}
+source /path/to/conda.sh
+conda activate bedtools
+
+#100kb
+bedtools multiinter -i /path/to/output/DATE_outliers_100kb.*.bed -names AKI AKZ BOU CBR CJO CKC CMR CPN CRE CSA CST CTA HKS KAZ KIB LKM LMT LPO LTA SHO TAB TLG TUB TUR UZB -header > /path/to/intersect.txt
+```
+
+This process results in a file compiling all intersections between all of the 25 
+sets of outlier windows. It gets imported back into R. 
+
+```{r importing results}
+directory <- 'path/to/intersect.txt'
+intersect.100 <- read.table(directory, header=TRUE)
+
+#keep lines shared by at least 2 populations. 
+intersect.100 <- intersect.100[-which(intersect.100$num == 1),]
+```
+
+
+## Concatenation
+
+We decided to concatenate to reduce the bulk of the data. Genomic coordinates of
+the windows get concatenated if the windows 1) overleap or 2) touch (have the 
+same bounds). 
+
+```{r concatenation}
+#init
+win.concat.100 <- data.frame()
+df <- intersect.100
+table_end <- dim(df)[1]-1
+final_beg = df$start[1]
+final_end = df$end[1]
+pops_included <- c()
+freq_pops <- c()
+
+#i iterates through the lines of intesect.txt
+for(i in c(1:table_end)){
+  if (df$chrom[i] == df$chrom[i+1]){ #if we stay on the same chrom
+    if(df$start[i+1] <= df$end[i]){ #if end of windows within start of the next
+      final_end = df$end[i+1] #extend window
+      freq_pops <- c(freq_pops, df$num[i])
+      pops_included <- c(pops_included, unlist(strsplit(intersect.100$list[i], split=',')))
+      #print(paste( "touching : " , " beg = " , final_beg, "end = ", final_end))
+    } else {
+      freq_pops <- c(freq_pops, df$num[i])
+      pops_included <- c(pops_included, unlist(strsplit(intersect.100$list[i], split=',')))
+      #print(paste(unique(pops_included), collapse = " "))
+      #print(paste("not touching : ", "beg = ", final_beg, "end = ", final_end))
+      win.concat.100 <- rbind(win.concat.100, c(df$chrom[i], final_beg, final_end, max(freq_pops), c(paste(unique(pops_included), collapse = " "))))
+      freq_pops <- NULL
+      pops_included <- NULL 
+      final_beg <- df$start[i+1]
+      final_end <- df$end[i+1]
+    }
+  } else {
+    freq_pops <- c(freq_pops, df$num[i])
+    pops_included <- c(pops_included, unlist(strsplit(intersect.100$list[i], split=',')))
+    #print(pops_included)
+    #print(paste(unique(pops_included), collapse = " "))
+    #print(paste("changing chrom : ", final_beg, final_end))
+    win.concat.100 <- rbind(win.concat.100, c(df$chrom[i], final_beg, final_end, max(freq_pops), c(paste(unique(pops_included), collapse = " "))))
+    freq_pops <- NULL
+    pops_included <- NULL
+    final_beg <- df$start[i+1]
+    final_end <- df$end[i+1]
+  }
+}
+names(win.concat.100) <- c('chrom', 'w_beg', 'w_end', 'max_freq', 'list')
+head(win.concat.100)
+rm(df, table_end, final_beg, final_end, pops_included, freq_pops)
+```
+
+Because the vector adding all the pop names was hard to count, we add back 
+the actual number of populations per line. 
+
+```{r add number of shared pops}
+freq <- c()
+#w counts windows 
+for(w in c(1:dim(win.concat.100)[1])){
+  freq <- c(freq, as.numeric(length(unlist(strsplit(win.concat.100$list[w], split = ' ')))))
+}
+win.concat.100 <- cbind(win.concat.100, freq)
+```
+
+
+## Prop_snp recalculation
+
+The windows have new bounds now. Therefore the prop_snp calculation is to be 
+redone. This is due to the 50% redundancy between windows: half of the SNPs used 
+to compute prop_snp in ex-window 1 is also used in ex-window 2 therefore 
+new-window 12 does not equate to prop_snp1 + prop_snp 2. 
+
+
+```{r recalculating 100kb}
+#init
+prop.snp.100 <- data.frame()
+nb.snp.100 <- data.frame()
+top.snp.100 <- data.frame()
+prop_snp <- c()
+nb_snp <- c()
+top_snp <- c()
+quantile.pops.100 <- c()
+
+#w counts windows 
+for(w in c(1:dim(win.concat.100)[1])){
+  w_beg <- as.numeric(win.concat.100[w,2])  #init
+  w_end <- as.numeric(win.concat.100[w,3])  #init
+  chrom <- as.numeric(win.concat.100[w,1])  #init
+  
+  #p counts pop names 
+  for(p in pops) {
+    df <- raw_data[paste(p)][[1]]
+    quantile_ihs <- quantile(df$abs_ihh, 0.99) #top 1%
+    region <- df[which(df[,3] >= w_beg & df[,3] <= w_end & df[,1] == chrom),] #subset to region
+    
+    nb_snp[p] <- as.numeric(dim(region)[1]) 
+    top_snp[p] <- as.numeric(length(which(region$abs_ihh >= quantile_ihs)))
+    prop_snp[p] <- top_snp[p]/nb_snp[p]
+    quantile.pops.100[p] <- quantile_ihs
+  }
+  prop.snp.100 <- rbind(prop.snp.100, c(chrom, w_beg, w_end, prop_snp, win.concat.100$list[w]))
+  nb.snp.100 <- rbind(nb.snp.100, c(chrom, w_beg, w_end, nb_snp, win.concat.100$list[w]))
+  top.snp.100 <- rbind(top.snp.100, c(chrom, w_beg, w_end, top_snp, win.concat.100$list[w]))
+}
+names(prop.snp.100) <- c(names(win.concat.100[1:3]), pops, "list")
+names(nb.snp.100) <- c(names(win.concat.100[1:3]), pops, "list")
+names(top.snp.100) <- c(names(win.concat.100[1:3]), pops, "list")
+```
+
+## Most shared pops
+```{r most shared }
+most.shared <- win.concat.100[which(win.concat.100$freq >= 16),]
+```
+
+
+
+# ECO REGIONAL TEST 
+Here we want to identify if there are any signals shared by all pops in NCA but 
+none SEA or vice versa. We want to test that using a statistical test. 
+
+## Non parametric tests
+
+Here we use a file containing latitudinal and subsistence strategyinfo for all 
+pops, that we then divide into North and South categories for Ecoregional testing. 
+
+```{r loading pop info, include=FALSE}
+directory <- '/path/to/pop/context_pops.txt'
+
+pop.info <- read.table(directory, sep = '\t', header=TRUE)
+lat_cat <- rep('NA', times = dim(pop.info)[1])
+lat_cat[which(pop.info$Lat > 35)] <- 'North'
+lat_cat[which(pop.info$Lat < 35)] <- 'South'
+pop.info <- cbind(pop.info, lat_cat)
+```
+
+Here we test to see whether the proportion of SNPs is significantly different 
+between North and South groups. 
+
+```{r NP for latitude, warning=FALSE}
+#init
+df <- prop.snp.100
+lat.100 <- data.frame()
+
+#w counts the windows 
+for(w in c(1:dim(df)[1]))
+{
+  prop_snp <- c(unlist(df[w,4:28]))
+  prop_snp <- as.numeric(prop_snp)
+  
+  data_lm <- cbind(prop_snp, pop.info)
+  data_lm$lat_cat <- as.factor(data_lm$lat_cat)
+  
+  #Condition : more than 2 values are different from 0
+  if(as.numeric(length(which(data_lm$prop_snp != 0))) >= 2 & table(is.na(data_lm$prop_snp))[[1]] == 25)
+  {
+    test <- wilcox.test(prop_snp~lat_cat, data_lm)
+    #compute pvalue for latitude
+    pval.lat <- test$p.value
+    # Extract the W statistic
+    W <- test$statistic
+    # Sizes of the groups
+    n1 <- sum(data_lm$lat_cat == "North")
+    n2 <- sum(data_lm$lat_cat == "South")
+    # Calculate U1 and U2
+    U1 <- W - (n1 * (n1 + 1)) / 2
+    U2 <- n1 * n2 - U1
+    # Calculate the U statistic (the smaller of U1 and U2)
+    U <- min(U1, U2)
+    size.effect <- cliff.delta(prop_snp ~ lat_cat, data = data_lm)$estimate
+  } 
+  else 
+  {
+    pval.lat <- NA
+    W <- NA
+    U <- NA
+    size.effect <- NA
+  }
+  lat.100 <- rbind(lat.100, c(df[w,1:3], pval.lat, W, U, size.effect))
+  names(lat.100) <- NULL
+}
+names(lat.100) <- c(names(df[1:3]), 'pval.lat', 'W', 'U', 'delta')
+qval.lat <- p.adjust(lat.100$pval.lat, method='BH') #multiple testing correction
+lat.100 <- cbind(lat.100, qval.lat)
+
+lat.100 <- lat.100[which(lat.100$qval.lat <= 0.05),] #keep only significant
+```
+
+
+
+#SUBSI
+
+Here we apply the same logic to subsistence strategies, this time using the subsi
+info inside of the context_pop.txt files. However, the dataset is getting 
+restrained to only NCA populations. 
+For this, we developed 2 methods 1) NP test and 2) subsi-only specific tests. 
+
+## Method 1: non parametric test
+Computing how many windows are being tested (containing only North pops)
+
+```{r}
+North <- pops[1:12] 
+compteur <- 0 #counts the number of windows containing North-only pops
+pas_North <- 0
+
+df <- prop.snp.100
+
+#l circles through the lines of prop_snp
+for(l in c(1:nrow(prop.snp.100)))
+{
+  pops_line <- unlist(strsplit(prop.snp.100$list[l], split= ' '))
+  length_pops <- as.numeric(length(pops_line))
+  if(length(pops_line)==length(which(pops_line %in% North))){
+    compteur <- compteur+1
+  }
+  else {
+    pas_North <- pas_North+1
+  }
+}
+```
+
+
+```{r NP subsi, warning=FALSE}
+#init
+df <- prop.snp.100
+df <- df[,1:15]
+subsi.100 <- data.frame()
+
+#w cycles through the windows of prop_snp
+for(w in c(1:dim(df)[1]))
+{
+  prop_snp <-c(unlist(df[w,4:15]))
+  prop_snp <- as.numeric(prop_snp)
+  data_lm <- cbind(prop_snp, pop.info[1:12,])
+  data_lm <- data_lm[which(data_lm$lat_cat == 'North'),]
+  
+  #Condition : more than 2 values are different from 0
+  if(as.numeric(length(which(data_lm$prop_snp != 0))) >= 2 & table(is.na(data_lm$prop_snp))[[1]] == 12)
+  {
+    #Farmers vs others----------------------------------------------------------
+    
+    data_lm$Lifestyle[which(data_lm$Lifestyle == "Hunter-gatherer")] <- c("Herder")
+    data_lm$Lifestyle <- as.factor(data_lm$Lifestyle)
+    test <- wilcox.test(prop_snp~Lifestyle, data_lm)
+    #compute pvalue for latitude
+    pval.F <- test$p.value
+    # Extract the W statistic
+    W.F <- test$statistic
+    # Sizes of the groups
+    n1 <- sum(data_lm$Lifestyle== "Farmer")
+    n2 <- sum(data_lm$lat_cat == "Herder")
+    # Calculate U1 and U2
+    U1 <- W.F - (n1 * (n1 + 1)) / 2
+    U2 <- n1 * n2 - U1
+    # Calculate the U statistic (the smaller of U1 and U2)
+    U.F <- min(U1, U2)
+    size.effect.F <- cliff.delta(prop_snp ~ Lifestyle, data = data_lm)$estimate
+    
+    data_lm <- cbind(prop_snp, pop.info[1:12,])
+  data_lm <- data_lm[which(data_lm$lat_cat == 'North'),]
+  
+  
+  #Herders vs others------------------------------------------------------------
+  
+  data_lm$Lifestyle[which(data_lm$Lifestyle == "Hunter-gatherer")] <- c("Farmer")
+    data_lm$Lifestyle <- as.factor(data_lm$Lifestyle)
+    test <- wilcox.test(prop_snp~Lifestyle, data_lm)
+    pval.H <- test$p.value
+    # Extract the W statistic
+    W.H <- test$statistic
+    # Sizes of the groups
+    n1 <- sum(data_lm$Lifestyle== "Farmer")
+    n2 <- sum(data_lm$lat_cat == "Herder")
+    # Calculate U1 and U2
+    U1 <- W.H - (n1 * (n1 + 1)) / 2
+    U2 <- n1 * n2 - U1
+    # Calculate the U statistic (the smaller of U1 and U2)
+    U.H <- min(U1, U2)
+    size.effect.H <- cliff.delta(prop_snp ~ Lifestyle, data = data_lm)$estimate
+        
+    data_lm <- cbind(prop_snp, pop.info[1:12,])
+  data_lm <- data_lm[which(data_lm$lat_cat == 'North'),]
+  
+  
+  #HG vs others----------------------------------------------------------------- 
+  data_lm$Lifestyle[which(data_lm$Lifestyle == "Herder")] <- c("Farmer")
+  data_lm$Lifestyle <- as.factor(data_lm$Lifestyle)
+  test <- wilcox.test(prop_snp~Lifestyle, data_lm)  
+  pval.HG <- test$p.value
+    # Extract the W statistic
+    W.HG <- test$statistic
+    # Sizes of the groups
+    n1 <- sum(data_lm$Lifestyle== "Farmer")
+    n2 <- sum(data_lm$lat_cat == "Hunter-gatherer")
+    # Calculate U1 and U2
+    U1 <- W.HG - (n1 * (n1 + 1)) / 2
+    U2 <- n1 * n2 - U1
+    # Calculate the U statistic (the smaller of U1 and U2)
+    U.HG <- min(U1, U2)
+    size.effect.HG <- cliff.delta(prop_snp ~ Lifestyle, data = data_lm)$estimate
+  
+  } 
+  else 
+  {
+    pval.F <- NA
+    pval.H <- NA
+    pval.HG <- NA
+    W.F <- NA
+    W.H <- NA
+    W.HG <- NA
+    U.F <- NA
+    U.H <- NA
+    U.HG <- NA
+    size.effect.F <- NA
+    size.effect.H <- NA
+    size.effect.HG <- NA
+  }
+  subsi.100 <- rbind(subsi.100, c(df[w,1:3], pval.F, W.F, U.F, size.effect.F,pval.H, W.H, U.H, size.effect.H, pval.HG, W.HG, U.HG, size.effect.HG ))
+  names(subsi.100) <- NULL
+}
+names(subsi.100) <- c(names(df[1:3]), 'pval.F', 'W.F', 'U.F', 'delta.F', 'pval.H', 'W.H', 'U.H', 'delta.H', 'pval.HG', 'W.HG', 'U.HG', 'delta.HG')
+#removing NA values
+subsi.100 <- subsi.100[which(!is.na(subsi.100$pval.F)),]
+
+qval.F <- p.adjust(subsi.100$pval.F, method='BH') #multiple testing corrections
+qval.H <- p.adjust(subsi.100$pval.H, method='BH')
+qval.HG <- p.adjust(subsi.100$pval.HG, method='BH')
+subsi.100 <- cbind(subsi.100, qval.F, qval.H, qval.HG)
+
+F.wil <- subsi.100[which(subsi.100$qval.F <= 0.05),] #farmer significant
+H.wil <- subsi.100[which(subsi.100$qval.H <= 0.05),] #herder significant
+HG.wil <- subsi.100[which(subsi.100$qval.HG <= 0.05),] #HG significant 
+```
+
+## Method 2: finding subsi-specific windows 
+This second method is designed to find the windows that are present only in the 
+pops sharing a subsi and absent in the other. We can adjust the level of string-
+ency using "pops.pick.H". In the paper, we have used 4/6 for herders, 3/3 for HG
+and Farmers. 
+
+```{r finding subsi specific windows}
+set.seed(666)
+
+#HERDERS -----------------------------------------------------------------------
+
+pops.pick.H <- 4 #adjust stringency 
+
+#picking x number of herders out of 6
+H <- c("AKI","AKZ","BOU","KAZ","KIB","TLG") #name of subset of pops
+comb.H <- combinations(length(H),pops.pick.H,H)
+comb.H <- as.data.frame(comb.H)
+H.undersample <- c()
+
+#l counts the number of H pop combinations possible 
+for(l in c(1:nrow(comb.H)))
+{
+  inter <- unlist(c(comb.H[l,]))
+  inter <- inter[order(inter)] #alphabetical 
+  H.undersample <- c(H.undersample, paste(inter, collapse=","))
+}
+
+any <- c()
+spe <- c()
+H.spe.win <- data.frame()
+for(c in c(1:length(H.undersample)))
+{
+  any <- c(any, length(which(apply(sapply(H.undersample[c], grepl, intersect.100$list),1, all) == T)))
+  spe.indexes <- grep(paste(H.undersample[c], collapse=","), intersect.100$list)
+  spe <- c(spe, length(which(intersect.100$num[spe.indexes] == pops.pick.H)))
+  spe.indexes <- spe.indexes[which(intersect.100$num[spe.indexes] == pops.pick.H)]
+  H.spe.win <- rbind(H.spe.win, intersect.100[spe.indexes,])
+}
+#all containing
+print(paste0(pops.pick.H,"/6 = ", sum(any) , " all"))
+#specific
+print(paste0(pops.pick.H,"/6 = ", sum(spe) , " specific"))
+
+
+
+#HG ----------------------------------------------------------------
+pops.pick.F.HG <- 2
+#picking 2 F or HG out of 3
+
+HG <- c("HKS", "SHO", "TUB")
+
+comb.HG <- combinations(length(HG),pops.pick.F.HG,HG)
+comb.HG <- as.data.frame(comb.HG)
+HG.undersample <- c()
+
+
+for(l in c(1:nrow(comb.HG)))
+{
+  inter <- unlist(c(comb.HG[l,]))
+  inter <- inter[order(inter)]
+  HG.undersample <- c(HG.undersample, paste(inter, collapse=","))
+}
+
+any <- c()
+spe <- c()
+F.spe.win <- data.frame()
+for(c in c(1:length(HG.undersample)))
+{
+  any <- c(any, length(which(apply(sapply(HG.undersample[c], grepl, intersect.100$list),1, all) == T)))
+  spe.indexes <- grep(paste(HG.undersample[c], collapse=","), intersect.100$list)
+  spe <- c(spe, length(which(intersect.100$num[spe.indexes] == pops.pick.F.HG)))
+  spe.indexes <- spe.indexes[which(intersect.100$num[spe.indexes] == pops.pick.F.HG)]
+  F.spe.win <- rbind(F.spe.win, intersect.100[spe.indexes,])
+}
+#all containing
+print(paste0("HG: ", pops.pick.F.HG,"/3 = ", sum(any) , " all"))
+#specific
+print(paste0("HG: ", pops.pick.F.HG,"/3 = ", sum(spe) , " specific"))
+
+
+#FARMERS -----------------------------------------------------------------------
+pops.pick.F.HG <- 3
+Farm <- c("TAB", "TUR", "UZB")
+comb.F <- combinations(length(Farm),pops.pick.F.HG,Farm)
+comb.F <- as.data.frame(comb.F)
+F.undersample <- c()
+
+for(l in c(1:nrow(comb.F)))
+{
+  inter <- unlist(c(comb.F[l,]))
+  inter <- inter[order(inter)]
+  F.undersample <- c(F.undersample, paste(inter, collapse=","))
+}
+
+any <- c()
+spe <- c()
+F.spe.win <- data.frame()
+for(c in c(1:length(F.undersample)))
+{
+  any <- c(any, length(which(apply(sapply(F.undersample[c], grepl, intersect.100$list),1, all) == T)))
+  spe.indexes <- grep(paste(F.undersample[c], collapse=","), intersect.100$list)
+  spe <- c(spe, length(which(intersect.100$num[spe.indexes] == pops.pick.F.HG)))
+  spe.indexes <- spe.indexes[which(intersect.100$num[spe.indexes] == pops.pick.F.HG)]
+  F.spe.win <- rbind(F.spe.win, intersect.100[spe.indexes,])
+}
+#all containing
+print(paste0("F: ", pops.pick.F.HG,"/3 = ", sum(any) , " all"))
+#specific
+print(paste0("F: ", pops.pick.F.HG,"/3 = ", sum(spe) , " specific"))
+
+```
+
+##bootstrap for Method 2
+
+For this boostrap, I enter the values of the number of windows found in for 6/6
+Herder, 5/6 Herder, 4/6 Herder etc as input. 
+```{r bootstrap subsi}
+set.seed(666)
+
+
+#HERDERS------------------------------------------------------------------------
+results.H.spe <- c(0,0,9,18,98) #number of windows when doing the "real" test
+results.H.all <- c(0,3,32,161,643)
+r <- 1
+
+for(n in c(6:2))
+{
+  pops.pick.H <- n
+  print(pops.pick.H)
+  
+  #make a list of forbidden combinations because they have real association
+  H.boot <- c("AKI","AKZ","BOU","KAZ","KIB","TLG")
+  forbidden.comb <- combinations(6,pops.pick.H,H.boot) #bootstrap for 6/6
+  forbidden.comb <- as.data.frame(forbidden.comb)
+  forbidden <- c()
+  for(l in c(1:nrow(forbidden.comb)))
+  {
+    inter <- unlist(c(forbidden.comb[l,]))
+    inter <- inter[order(inter)]
+    forbidden <- c(forbidden, paste(inter, collapse=","))
+  }
+  
+  
+  any.H <- c()
+  spe.H <- c()
+  reshuffle.H <- 0
+  
+  for(b in c(1:10000)){
+    #herder=6
+    H.boot <- sample(pops, pops.pick.H)
+    H.boot <- H.boot[order(H.boot)]
+    #as long as the random combination is "forbidden", reshuffle
+    while(paste(H.boot, collapse=",") %in% forbidden) 
+    {
+      reshuffle.H <- reshuffle.H+1
+      H.boot <- sample(pops, pops.pick.H)
+      H.boot <- H.boot[order(H.boot)]
+    }
+    #find any list containing the names in HG.boot 
+    any.H <- c(any.H, length(which(apply(sapply(H.boot, grepl, intersect.100$list),1, all) == T)))
+    #find any list containing only the names in HG.boot 
+    spe.H <- c(spe.H, length(grep(paste(H.boot, collapse=","), intersect.100$list)))
+  }
+  #all containing
+  print(paste0(pops.pick.H,"/6 = ", mean(any.H) , " all. Details: max=", max(any.H), " min=", min(any.H)))
+  print(paste0("sup:", length(which(any.H >= results.H.all[r]))))
+  #specific
+  print(paste0(pops.pick.H,"/6 = ", mean(spe.H) , " specific. Details: max=", max(spe.H), " min=", min(spe.H)))
+  print(paste0("sup:", length(which(spe.H >= results.H.spe[r]))))
+  print(paste0("reshuffle = ", reshuffle.H))
+  r <- r+1
+}
+
+#HG-----------------------------------------------------------------------------
+set.seed(666)
+results.HG.all <- c(1,40)
+results.HG.spe <- c(1,21)
+r <- 1
+for(n in c(3:2))
+{
+  pops.pick.F.HG <- n
+  print(pops.pick.F.HG)
+  #picking 2 F or HG out of 3
+  HG.boot <- c("HKS", "SHO", "TUB")
+  forbidden.comb.HG <- combinations(3,pops.pick.F.HG,HG.boot)
+  forbidden.comb.HG <- as.data.frame(forbidden.comb.HG)
+  forbidden.HG <- c()
+  for(l in c(1:nrow(forbidden.comb.HG)))
+  {
+    inter <- unlist(c(forbidden.comb.HG[l,]))
+    inter <- inter[order(inter)]
+    forbidden.HG <- c(forbidden.HG, paste(inter, collapse=","))
+  }
+  
+  any.F.HG <- c()
+  spe.F.HG <- c()
+  reshuffle.HG.F <- 0
+  for(b in c(1:10000)){
+    #HG or Farmers = 3
+    HG.F.boot <- sample(pops, pops.pick.F.HG)
+    HG.F.boot <- HG.F.boot[order(HG.F.boot)]  #alphabetical to match order in intersect.100$list
+    #resampling to avoid these combinations
+    while(paste(HG.F.boot, collapse=",") %in% forbidden.HG)
+    {
+      reshuffle.HG.F <- reshuffle.HG.F+1
+      HG.F.boot <- sample(pops, pops.pick.F.HG)
+      HG.F.boot <- HG.F.boot[order(HG.F.boot)]
+    }
+    #find any list containing the names in HG.boot 
+    any.F.HG <- c(any.F.HG, length(which(apply(sapply(HG.F.boot, grepl, intersect.100$list),1, all) == T)))
+    #find any list containing only the names in HG.boot 
+    spe.F.HG <- c(spe.F.HG, length(grep(paste(HG.F.boot, collapse=","), intersect.100$list)))
+  }
+  #all containing
+  print(paste0("HG: ", pops.pick.F.HG,"/3 = ", mean(any.F.HG) , " all"))
+  print(paste0("sup:", length(which(any.F.HG >= results.HG.all[r]))))
+  #specific
+  print(paste0("HG: ", pops.pick.F.HG,"/3 = ", mean(spe.F.HG) , " specific. Max=", max(spe.F.HG), " min = ", min(spe.F.HG)))
+  print(paste0("sup:", length(which(spe.F.HG >= results.HG.spe[r]))))
+  print(paste0("reshuffle = ", reshuffle.HG.F))
+  r <- r+1
+}
+
+#F------------------------------------------------------------------------------
+set.seed(666)
+results.HG.all <- c(27,204)
+results.HG.spe <- c(3,40)
+r <- 1
+for(n in c(3:2))
+{
+  pops.pick.F.HG <- n
+  print(pops.pick.F.HG)
+  #picking 2 F or HG out of 3
+  HG.boot <- c("TAB", "TUR", "UZB")
+  forbidden.comb.HG <- combinations(3,pops.pick.F.HG,HG.boot)
+  forbidden.comb.HG <- as.data.frame(forbidden.comb.HG)
+  forbidden.HG <- c()
+  for(l in c(1:nrow(forbidden.comb.HG)))
+  {
+    inter <- unlist(c(forbidden.comb.HG[l,]))
+    inter <- inter[order(inter)]
+    forbidden.HG <- c(forbidden.HG, paste(inter, collapse=","))
+  }
+  
+  any.F.HG <- c()
+  spe.F.HG <- c()
+  reshuffle.HG.F <- 0
+  for(b in c(1:10000)){
+    #HG or Farmers = 3
+    HG.F.boot <- sample(pops, pops.pick.F.HG)
+    HG.F.boot <- HG.F.boot[order(HG.F.boot)]  #alphabetical to match order in intersect.100$list
+    #resampling to avoid these combinations
+    while(paste(HG.F.boot, collapse=",") %in% forbidden.HG)
+    {
+      reshuffle.HG.F <- reshuffle.HG.F+1
+      HG.F.boot <- sample(pops, pops.pick.F.HG)
+      HG.F.boot <- HG.F.boot[order(HG.F.boot)]
+    }
+    #find any list containing the names in HG.boot 
+    any.F.HG <- c(any.F.HG, length(which(apply(sapply(HG.F.boot, grepl, intersect.100$list),1, all) == T)))
+    #find any list containing only the names in HG.boot 
+    spe.F.HG <- c(spe.F.HG, length(grep(paste(HG.F.boot, collapse=","), intersect.100$list)))
+  }
+  #all containing
+  print(paste0("HG: ", pops.pick.F.HG,"/3 = ", mean(any.F.HG) , " all"))
+  print(paste0("sup:", length(which(any.F.HG >= results.HG.all[r]))))
+  #specific
+  print(paste0("HG: ", pops.pick.F.HG,"/3 = ", mean(spe.F.HG) , " specific. Max=", max(spe.F.HG), " min = ", min(spe.F.HG)))
+  print(paste0("sup:", length(which(spe.F.HG >= results.HG.spe[r]))))
+  print(paste0("reshuffle = ", reshuffle.HG.F))
+  r <- r+1
+}
+```
